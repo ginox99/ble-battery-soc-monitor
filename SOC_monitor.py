@@ -3,9 +3,11 @@ import json
 import asyncio
 import datetime
 import numpy as np
+import keyboard
 from bleak import BleakScanner, BleakClient, BleakError
 import re
 import logging
+import threading
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
@@ -91,9 +93,9 @@ async def handle_device(ble_address):
             logging.error(f"An unexpected error occurred with device `{ble_address}`: {e}")
             return
 
+soc_data = []
 # Main execution flow
 async def main():
-    soc_data = []
     for ble_address in mac_list:
         result = await handle_device(ble_address)
         if result:
@@ -101,7 +103,26 @@ async def main():
             soc_data.append([ble_address, battery_level, time_data])
             logging.info(f"Battery level for device {ble_address}: {battery_level}% at {time_data}")
 
-    np.savetxt(f'penguin{datetime.date.today()}.csv', soc_data, fmt='%s', delimiter=',')
+# Keyboard input detection in a separate thread
+def listen_for_keypress():
+    while True:
+        if keyboard.is_pressed('x'):  # Detect if 'x' is pressed
+            np.savetxt(f'penguin_{datetime.date.today()}.csv', soc_data, fmt='%s', delimiter=',')
+            print('CSV file saved!')
+            exit()  # Exit the program
+
+async def run_program():
+    # Start the key press listener in a separate thread
+    keypress_thread = threading.Thread(target=listen_for_keypress)
+    keypress_thread.daemon = True  # Allow thread to exit when the main program exits
+    keypress_thread.start()
+
+    while True:
+        await main()
+
+        await asyncio.sleep(300)  # Wait for a short period before checking again
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_program())
+
+input('Press enter to exit')
