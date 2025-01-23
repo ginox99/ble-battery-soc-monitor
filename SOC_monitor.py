@@ -42,14 +42,17 @@ if not mac_list:
         mac_list.append(extract_mac(qr_info))
 
 # UUIDs for battery GATT server
-BATTERY_SERVICE_UUID = "0000180F-0000-1000-8000-00805F9B34FB"
 BATTERY_LEVEL_UUID = "00002A19-0000-1000-8000-00805F9B34FB"
+BATTERY_SN_UUID = "00002A25-0000-1000-8000-00805F9B34FB"
+BATTERY_FW_UUID = "00002A26-0000-1000-8000-00805F9B34FB"
 
 # Read battery level from device
 async def read_battery_data(client):
     try:
         battery_level = await client.read_gatt_char(BATTERY_LEVEL_UUID)
-        return battery_level[0]  # Return the battery level
+        battery_sn = await client.read_gatt_char(BATTERY_SN_UUID)
+        battery_fw = await client.read_gatt_char(BATTERY_FW_UUID)
+        return battery_level[0], battery_sn.decode('utf-8'), battery_fw.decode('utf-8')
     except BleakError as e:
         logging.error(f"Error reading battery data: {e}")
         return None
@@ -71,22 +74,16 @@ async def handle_device(ble_address):
 
             logging.info(f"Client found at address: {ble_address}")
             async with BleakClient(device) as client:
-                battery_level = await read_battery_data(client)
+                battery_level, battery_sn, battery_fw = await read_battery_data(client)
                 if battery_level is not None:
                     time_data = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    return battery_level, time_data
+                    return battery_level, time_data, battery_fw, battery_sn
                 else:
                     logging.error(f"Failed to get battery data for device {ble_address}")
                     return
 
         except (BleakError, TimeoutError) as e:
             logging.error(f"Error while interacting with BLE device at `{ble_address}`: {e}")
-            attempt += 1
-            if attempt <= max_retries:
-                logging.info(f"Attempt {attempt} failed. Retrying...")
-                await asyncio.sleep(2)  # Sleep for a short period before retrying
-            else:
-                logging.error(f"Failed to connect to `{ble_address}` after {max_retries + 1} attempts.")
             return
 
         except Exception as e:
@@ -99,9 +96,9 @@ async def main():
     for ble_address in mac_list:
         result = await handle_device(ble_address)
         if result:
-            battery_level, time_data = result
-            soc_data.append([ble_address, battery_level, time_data])
-            logging.info(f"Battery level for device {ble_address}: {battery_level}% at {time_data}")
+            battery_level, time_data, battery_fw, battery_sn = result
+            soc_data.append([battery_sn, battery_fw, ble_address, battery_level, time_data])
+            logging.info(f"Battery level for device {ble_address}({battery_sn}): {battery_level}% at {time_data}")
 
 # Keyboard input detection in a separate thread
 def listen_for_keypress():
@@ -120,7 +117,7 @@ async def run_program():
     while True:
         await main()
 
-        await asyncio.sleep(300)  # Wait for a short period before checking again
+        await asyncio.sleep(120)  # Wait for a short period before checking again
 
 if __name__ == "__main__":
     asyncio.run(run_program())
