@@ -8,8 +8,8 @@ A Python script to monitor the battery levels of backup power units using their 
 - Saves battery data with timestamps into a CSV file.
 
 ## TODO
-- [ ] Improve error handling for invalid QR codes.
-- [ ] Add Charging State: Detect if the device is charging (SoC increasing), discharging (SoC decreasing), or full (SoC stable).
+- [x] Improve error handling for invalid QR codes.
+- [ ] ~Add Charging State: Detect if the device is charging (SoC increasing), discharging (SoC decreasing), or full (SoC stable).~
 - [ ] Implement an option to specify custom output directories for CSV files.
-- [ ] Support additional GATT characteristics, such as device temperature.
+- [x] Support additional GATT characteristics.
 - [ ] Build a simple GUI for user-friendly input of MAC addresses.
