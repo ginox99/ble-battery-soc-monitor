@@ -2,10 +2,11 @@ import sys
 import json
 import asyncio
 import datetime
-import numpy as np
+import pandas as pd
 import keyboard
 from bleak import BleakScanner, BleakClient, BleakError
 import re
+import os
 import logging
 import threading
 
@@ -100,13 +101,19 @@ async def main():
             soc_data.append([battery_sn, battery_fw, ble_address, battery_level, time_data])
             logging.info(f"Battery level for device {ble_address}({battery_sn}): {battery_level}% at {time_data}")
 
+# Save data to a CSV file
+def save_to_csv(data):
+    df = pd.DataFrame(data, columns=['Serial Number', 'Firmware Version', 'MAC Address', 'Battery Level', 'Timestamp'])
+    file_name = f'penguin_{datetime.date.today()}.csv'
+    df.to_csv(file_name, index=False)
+    print(f'CSV file saved as {file_name}!')
+
 # Keyboard input detection in a separate thread
 def listen_for_keypress():
     while True:
         if keyboard.is_pressed('x'):  # Detect if 'x' is pressed
-            np.savetxt(f'penguin_{datetime.date.today()}.csv', soc_data, fmt='%s', delimiter=',')
-            print('CSV file saved!')
-            exit()  # Exit the program
+            save_to_csv(soc_data)
+            os._exit(0)  # Exit the program
 
 async def run_program():
     # Start the key press listener in a separate thread
