@@ -4,43 +4,63 @@ import asyncio
 import datetime
 import pandas as pd
 import keyboard
-from bleak import BleakScanner, BleakClient, BleakError
 import re
 import os
 import logging
 import threading
+from bleak import BleakScanner, BleakClient, BleakError
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
+
+# Print instruction
+print("Penguin SOC monitor started......\nPress Shift + 1 to save files")
 
 # Validate MAC address format
 def validate_mac(mac):
     return bool(re.match(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$', mac))
 
-# Extract MAC address from QR code information
-def extract_mac(qr_info):
+# Collect information from QRs and extract mac addresses
+def extract_mac():
+    qr_info = input(f"Scan QR code for device({order}) from either side: ")
     try:
-        mac_address = json.loads(qr_info[0])['mac']
-        formatted_mac = ':'.join([mac_address[i:i + 2] for i in range(0, len(mac_address), 2)])
-        return formatted_mac
+        data = json.loads(qr_info)
+        # Check if the JSON object has the 'mac' key
+        if 'mac' in data:
+            mac_address = data['mac']
+            formatted_mac = ':'.join([mac_address[i:i + 2] for i in range(0, len(mac_address), 2)])
+            if validate_mac(formatted_mac):
+                return formatted_mac
+        else:
+            print('MAC address not found in the QR code data, Please try again.')
+
     except Exception as e:
-        for element in qr_info:
-            if len(element) == 17:  # Standard MAC address length
-                return element
-        return 'Invalid MAC address'
+        data = f'{qr_info}'
+        if validate_mac(data):
+            return qr_info
+        else:
+            print('Invalid MAC address format, Please try again.')
+
+    # If no valid MAC is found or an error occurs
+    return extract_mac()
 
 # Number of devices for testing
-num_devices = int(input("How many devices? "))
+rack_id = input("\nWhat is the rack id? ")
+
+# Number of devices for testing
+try:
+    num_devices = int(input("How many devices? "))
+    if num_devices <= 0:
+        raise ValueError("Number of devices must be a positive integer.")
+except ValueError as e:
+    logging.error(f"Invalid input: {e}")
+    sys.exit(1)
 
 # Store MAC addresses from user input
 mac_list = []
-for i in range(1, len(sys.argv)):
-    mac_list.append(sys.argv[i])
-
-if not mac_list:
-    for i in range(1, num_devices + 1):
-        qr_info = [input(f'Scan either QR for device {i}:')]
-        mac_list.append(extract_mac(qr_info))
+for order in range(1, num_devices + 1):
+    result = extract_mac()
+    mac_list.append(result)
 
 # UUIDs for battery GATT server
 BATTERY_LEVEL_UUID = "00002A19-0000-1000-8000-00805F9B34FB"
@@ -60,17 +80,11 @@ async def read_battery_data(client):
 
 # Handle BLE device connection and reading
 async def handle_device(ble_address):
-    max_retries = 2  # Number of times to retry connection on failure
-    attempt = 0  # Track the number of attempts
-
-    while attempt <= max_retries:
+    while True:
         try:
-            if not validate_mac(ble_address):
-                logging.error(f"Invalid MAC address format detected: {ble_address}")
-                return
             device = await BleakScanner.find_device_by_address(ble_address, timeout=20.0)
             if device is None:
-                logging.error(f"A Bluetooth LE device with the address `{ble_address}` was not found.")
+                logging.error(f"A Bluetooth LE device with the address `{ble_address}` was not found.\n")
                 return
 
             logging.info(f"Client found at address: {ble_address}")
@@ -78,55 +92,60 @@ async def handle_device(ble_address):
                 battery_level, battery_sn, battery_fw = await read_battery_data(client)
                 if battery_level is not None:
                     time_data = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    return battery_level, time_data, battery_fw, battery_sn
+                    return battery_level, time_data, battery_sn, ble_address
                 else:
-                    logging.error(f"Failed to get battery data for device {ble_address}")
+                    logging.error(f"Failed to get battery data for device {ble_address}.\n")
                     return
 
-        except (BleakError, TimeoutError) as e:
-            logging.error(f"Error while interacting with BLE device at `{ble_address}`: {e}")
-            return
-
         except Exception as e:
-            logging.error(f"An unexpected error occurred with device `{ble_address}`: {e}")
+            logging.error(f"An unexpected error occurred with device `{ble_address}`: {e}.\n")
             return
 
-soc_data = []
+# Dictionary to store data for each serial number
+sn_data = {}
+
 # Main execution flow
 async def main():
-    for ble_address in mac_list:
-        result = await handle_device(ble_address)
+    for mac_address in mac_list:
+        result = await handle_device(mac_address)
         if result:
-            battery_level, time_data, battery_fw, battery_sn = result
-            soc_data.append([battery_sn, battery_fw, ble_address, battery_level, time_data])
-            logging.info(f"Battery level for device {ble_address}({battery_sn}): {battery_level}% at {time_data}")
+            battery_level, time_data, battery_sn, ble_address = result
+            if battery_sn not in sn_data:
+                sn_data[battery_sn] = []
+            position = mac_list.index(ble_address)
+            sn_data[battery_sn].append((time_data, battery_level, ble_address, position))
+            logging.info(f"Battery level for device({position + 1}) {mac_address}({battery_sn}): {battery_level}% at {time_data}\n")
 
-# Save data to a CSV file
-def save_to_csv(data):
-    df = pd.DataFrame(data, columns=['Serial Number', 'Firmware Version', 'MAC Address', 'Battery Level', 'Timestamp'])
-    file_name = f'penguin_{datetime.date.today()}.csv'
-    df.to_csv(file_name, index=False)
-    print(f'CSV file saved as {file_name}!')
+# Save data to individual Excel files for each SN
+def save_to_excel():
+    try:
+        for sn, data in sn_data.items():
+            timestamps_and_soc = [(timestamp, soc) for timestamp, soc, *_ in data]  # Unpack the tuples and keep timestamp and soc
+            position = [item[-1] for item in data][0]
+            df = pd.DataFrame(timestamps_and_soc, columns=['Timestamp', 'Battery Level'])
+            file_name = f"{sn}_R{rack_id}P{position + 1}.xlsx"
+            df.to_excel(file_name, index=False)
+            logging.info(f"Excel file saved as {file_name}!")
+    except Exception as e:
+        logging.error(f"Error saving Excel files: {e}")
 
 # Keyboard input detection in a separate thread
 def listen_for_keypress():
     while True:
-        if keyboard.is_pressed('x'):  # Detect if 'x' is pressed
-            save_to_csv(soc_data)
+        if keyboard.is_pressed('!'):
+            save_to_excel()
             os._exit(0)  # Exit the program
 
 async def run_program():
-    # Start the key press listener in a separate thread
     keypress_thread = threading.Thread(target=listen_for_keypress)
-    keypress_thread.daemon = True  # Allow thread to exit when the main program exits
+    keypress_thread.daemon = True
     keypress_thread.start()
 
     while True:
         await main()
-
-        await asyncio.sleep(120)  # Wait for a short period before checking again
+        await asyncio.sleep(60)  # Wait for a short period before looping
 
 if __name__ == "__main__":
-    asyncio.run(run_program())
+        asyncio.run(run_program())
 
-input('Press enter to exit')
+input('Enter any key to exit...')
